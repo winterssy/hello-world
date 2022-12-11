@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  workflow_dispatch:
+#  push:
+#    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+env:
+  GH_REPO: ${{ secrets.GH_REPO }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+  BIN_NAME: ${{ secrets.BIN_NAME }}
+  BIN_VERSION: ${{ secrets.BIN_VERSION }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write # Needed for creating releases
+
+    strategy:
+      matrix:
+        include:
+          - build: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            cross: true
+          - build: linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            cross: true
+          - build: macos-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            cross: false
+          - build: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            cross: false
+          - build: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cross: false
+            rustflags: -C target-feature=+crt-static
+          - build: windows-arm64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            cross: false
+            rustflags: -C target-feature=+crt-static
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ env.GH_REPO }}
+          token: ${{ env.GH_PAT }}
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Set RUSTFLAGS env variable
+        if: matrix.rustflags
+        shell: bash
+        run: |
+          echo "RUSTFLAGS=${{ matrix.rustflags }}" >> $GITHUB_ENV
+
+      - name: Build target
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ matrix.cross }}
+          command: build
+          args: --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          staging="$BIN_NAME-${{ matrix.build }}"
+          mkdir "$staging"
+
+          if [[ "${{ matrix.os }}" == "windows"* ]]; then
+            cp "target/${{ matrix.target }}/release/$BIN_NAME.exe" "$staging"
+            7z a "$staging.zip" "./$staging/*"
+          else
+            cp "target/${{ matrix.target }}/release/$BIN_NAME" "$staging"
+            tar zcf "$staging.tar.gz" -C "$staging" "$BIN_NAME"
+          fi
+
+      - name: Publish
+        uses: softprops/action-gh-release@v1
+        with:
+          repository: ${{ env.GH_REPO }}
+          token: ${{ env.GH_PAT }}
+          draft: true
+          name: ${{ env.BIN_NAME }}-v${{ env.BIN_VERSION }}
+          tag_name: v${{ env.BIN_VERSION }}
+          files: |
+            ${{ env.BIN_NAME }}-*.*
